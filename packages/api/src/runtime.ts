@@ -1,26 +1,31 @@
-import { createPluginRuntime, type PluginBinding } from "every-plugin";
+import { implement } from "@orpc/server";
+import { Effect } from "every-plugin/effect";
+import { contract } from "@every-plugin/template/src/contract";
+import { DataProviderService } from "@every-plugin/template/src/service";
 
-import type DataProviderTemplatePlugin from "@every-plugin/template";
+const DEFAULT_BASE_URL =
+  process.env.DATA_PROVIDER_BASE_URL ?? "https://api.wormholescan.io/api/v1";
+const DEFAULT_TIMEOUT = parseTimeout(process.env.DATA_PROVIDER_TIMEOUT);
 
-type AppBindings = {
-  "@every-plugin/template": PluginBinding<typeof DataProviderTemplatePlugin>;
+const API_KEY = process.env.DATA_PROVIDER_API_KEY ?? "not-required";
+
+const service = new DataProviderService(DEFAULT_BASE_URL, API_KEY, DEFAULT_TIMEOUT);
+const builder = implement(contract).$context();
+
+export const dataProviderRouter = {
+  getSnapshot: builder.getSnapshot.handler(async ({ input }) => {
+    return await Effect.runPromise(service.getSnapshot(input));
+  }),
+  ping: builder.ping.handler(async () => {
+    return await Effect.runPromise(service.ping());
+  }),
 };
 
-const runtime = createPluginRuntime<AppBindings>({
-  registry: {
-    "@every-plugin/template": {
-      remoteUrl: "http://localhost:3014/remoteEntry.js",
-    },
-  },
-  secrets: {
-    DATA_PROVIDER_API_KEY: process.env.DATA_PROVIDER_API_KEY!,
-  },
-});
+function parseTimeout(rawTimeout: string | undefined) {
+  if (!rawTimeout) {
+    return 15_000;
+  }
 
-export const { router: dataProviderRouter } = await runtime.usePlugin("@every-plugin/template", {
-  variables: {
-    baseUrl: process.env.DATA_PROVIDER_BASE_URL || "https://api.example.com",
-    timeout: Number(process.env.DATA_PROVIDER_TIMEOUT) || 10000,
-  },
-  secrets: { apiKey: "{{DATA_PROVIDER_API_KEY}}" },
-});
+  const parsed = Number.parseInt(rawTimeout, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 15_000;
+}

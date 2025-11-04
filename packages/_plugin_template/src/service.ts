@@ -133,7 +133,7 @@ export class DataProviderService {
 
   constructor(
     private readonly baseUrl: string,
-    private readonly apiKey: string, // Not used for Wormhole public API
+    private readonly apiKey: string,
     private readonly timeout: number
   ) {
     // Rate limiting from ENV (default 10 req/sec)
@@ -142,6 +142,18 @@ export class DataProviderService {
       10
     );
     this.rateLimiter = new RateLimiter(maxRequestsPerSecond, maxRequestsPerSecond);
+  }
+
+  private buildHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {
+      "Accept": "application/json",
+    };
+
+    if (this.apiKey && this.apiKey !== "not-required") {
+      headers["x-api-key"] = this.apiKey;
+    }
+
+    return headers;
   }
 
   /**
@@ -191,9 +203,7 @@ export class DataProviderService {
 
       const response = await fetch(url, {
         method: "GET",
-        headers: {
-          "Accept": "application/json",
-        },
+        headers: this.buildHeaders(),
         signal: controller.signal,
       });
 
@@ -350,9 +360,7 @@ export class DataProviderService {
 
       const response = await fetch(url, {
         method: "GET",
-        headers: {
-          "Accept": "application/json",
-        },
+        headers: this.buildHeaders(),
         signal: controller.signal,
       });
 
@@ -380,23 +388,24 @@ export class DataProviderService {
           // Use real Governor limits
           const maxTransactionSize = parseFloat(sourceChainLimit.maxTransactionSize);
           const availableNotional = parseFloat(sourceChainLimit.availableNotional);
+          const usableCapacity = Math.min(maxTransactionSize, availableNotional);
 
           liquidity.push({
             route,
             thresholds: [
               {
                 // Use 50% of max transaction size for low slippage (0.1%)
-                maxAmountIn: Math.floor(maxTransactionSize * 0.5).toString(),
+                maxAmountIn: Math.floor(usableCapacity * 0.5).toString(),
                 slippageBps: 10,
               },
               {
                 // Use 80% of max transaction size for medium slippage (0.5%)
-                maxAmountIn: Math.floor(maxTransactionSize * 0.8).toString(),
+                maxAmountIn: Math.floor(usableCapacity * 0.8).toString(),
                 slippageBps: 50,
               },
               {
                 // Use full max transaction size for higher slippage (1.0%)
-                maxAmountIn: Math.floor(maxTransactionSize).toString(),
+                maxAmountIn: Math.floor(usableCapacity).toString(),
                 slippageBps: 100,
               }
             ],
@@ -455,6 +464,10 @@ export class DataProviderService {
       const configPath = join(__dirname, "../config/token-decimals.json");
       const configData = readFileSync(configPath, "utf-8");
       const config: TokenDecimalsConfig = JSON.parse(configData);
+      const remoteTokens = await this.fetchTokenListWithRetry().catch(() => []);
+      if (remoteTokens.length) {
+        console.log(`[Wormhole] Remote token list returned ${remoteTokens.length} entries for cross-checking`);
+      }
 
       const assets: AssetType[] = [];
 
@@ -527,9 +540,7 @@ export class DataProviderService {
 
         const response = await fetch(url, {
           method: "GET",
-          headers: {
-            "Accept": "application/json",
-          },
+          headers: this.buildHeaders(),
           signal: controller.signal,
         });
 
@@ -539,9 +550,9 @@ export class DataProviderService {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
 
-        const data = await response.json();
+        const data = await response.json() as WormholeToken[];
         console.log(`[Wormhole] Successfully fetched ${data.length || 0} tokens`);
-        return data as WormholeToken[];
+        return data;
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
         console.error(`[Wormhole] Token list attempt ${attempt + 1} failed:`, lastError.message);
