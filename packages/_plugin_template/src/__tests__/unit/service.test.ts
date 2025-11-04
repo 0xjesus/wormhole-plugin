@@ -1,29 +1,95 @@
 import { Effect } from "every-plugin/effect";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DataProviderService } from "../../service";
 
 // Mock route for testing
 const mockRoute = {
   source: {
     chainId: "1",
-    assetId: "0xA0b86a33E6442e082877a094f204b01BF645Fe0",
+    assetId: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
     symbol: "USDC",
     decimals: 6,
   },
   destination: {
     chainId: "137",
-    assetId: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa8417",
+    assetId: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
     symbol: "USDC",
     decimals: 6,
   }
 };
 
+// Mock fetch globally
+global.fetch = vi.fn();
+
 describe("DataProviderService", () => {
-  const service = new DataProviderService(
-    "https://api.example.com",
-    "test-api-key",
-    5000
-  );
+  let service: DataProviderService;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    service = new DataProviderService(
+      "https://api.example.com",
+      "test-api-key",
+      5000
+    );
+
+    // Mock different API responses based on URL
+    (global.fetch as any).mockImplementation((url: string) => {
+      // Mock scorecards API for volume data
+      if (url.includes('/scorecards')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            "24h_volume": "5000000",
+            "7d_volume": "35000000",
+            "30d_volume": "150000000",
+            "total_messages": "1000000",
+            "total_value_locked": "2000000000"
+          })
+        });
+      }
+
+      // Mock Governor API for liquidity limits
+      if (url.includes('/governor/notional/limit')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ([
+            {
+              chainId: 1,
+              availableNotional: "15000000",
+              notionalLimit: "20000000",
+              maxTransactionSize: "5000000"
+            },
+            {
+              chainId: 137,
+              availableNotional: "1500000",
+              notionalLimit: "2000000",
+              maxTransactionSize: "500000"
+            },
+            {
+              chainId: 42161,
+              availableNotional: "1500000",
+              notionalLimit: "2000000",
+              maxTransactionSize: "500000"
+            }
+          ])
+        });
+      }
+
+      // Mock token list API (legacy, might not be used anymore)
+      return Promise.resolve({
+        ok: true,
+        json: async () => ([
+          {
+            symbol: "USDC",
+            volume_24h: "1000000",
+            platforms: {
+              "ethereum": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+            }
+          }
+        ])
+      });
+    });
+  });
 
   describe("getSnapshot", () => {
     it("should return complete snapshot structure", async () => {
@@ -88,7 +154,7 @@ describe("DataProviderService", () => {
       expect(rate.quotedAt).toBeTypeOf("string");
     });
 
-    it("should provide liquidity at 50bps and 100bps thresholds", async () => {
+    it("should provide liquidity at 10bps, 50bps and 100bps thresholds", async () => {
       const result = await Effect.runPromise(
         service.getSnapshot({
           routes: [mockRoute],
@@ -101,10 +167,11 @@ describe("DataProviderService", () => {
       expect(result.liquidity[0].route).toEqual(mockRoute);
 
       const thresholds = result.liquidity[0].thresholds;
-      expect(thresholds).toHaveLength(2);
+      expect(thresholds).toHaveLength(3);
 
-      // Should have both required thresholds
+      // Should have all three thresholds based on Governor limits
       const bpsValues = thresholds.map(t => t.slippageBps);
+      expect(bpsValues).toContain(10);
       expect(bpsValues).toContain(50);
       expect(bpsValues).toContain(100);
 
@@ -124,7 +191,8 @@ describe("DataProviderService", () => {
         })
       );
 
-      expect(result.listedAssets.assets).toHaveLength(3);
+      // Now loads full token list from token-decimals.json (150 assets)
+      expect(result.listedAssets.assets.length).toBeGreaterThan(50);
 
       // Verify asset structure
       result.listedAssets.assets.forEach(asset => {

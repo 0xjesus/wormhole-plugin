@@ -1,7 +1,10 @@
 import type { PluginRegistry } from "every-plugin";
 import { createLocalPluginRuntime } from "every-plugin/testing";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import DataProviderTemplatePlugin from "../../index";
+
+// Mock fetch globally for integration tests
+global.fetch = vi.fn();
 
 // Mock route for testing
 const mockRoute = {
@@ -20,15 +23,15 @@ const mockRoute = {
 };
 
 const TEST_REGISTRY: PluginRegistry = {
-  "@every-plugin/template": {
+  "@every-plugin/wormhole": {
     remoteUrl: "http://localhost:3000/remoteEntry.js",
     version: "1.0.0",
-    description: "Data provider template for integration testing",
+    description: "Wormhole data provider for integration testing",
   },
 };
 
 const TEST_PLUGIN_MAP = {
-  "@every-plugin/template": DataProviderTemplatePlugin,
+  "@every-plugin/wormhole": DataProviderTemplatePlugin,
 } as const;
 
 const TEST_CONFIG = {
@@ -50,15 +53,77 @@ describe("Data Provider Plugin Integration Tests", () => {
     TEST_PLUGIN_MAP
   );
 
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    // Mock different API responses based on URL
+    (global.fetch as any).mockImplementation((url: string) => {
+      // Mock scorecards API for volume data
+      if (url.includes('/scorecards')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            "24h_volume": "5000000",
+            "7d_volume": "35000000",
+            "30d_volume": "150000000",
+            "total_messages": "1000000",
+            "total_value_locked": "2000000000"
+          })
+        });
+      }
+
+      // Mock Governor API for liquidity limits
+      if (url.includes('/governor/notional/limit')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ([
+            {
+              chainId: 1,
+              availableNotional: "15000000",
+              notionalLimit: "20000000",
+              maxTransactionSize: "5000000"
+            },
+            {
+              chainId: 137,
+              availableNotional: "1500000",
+              notionalLimit: "2000000",
+              maxTransactionSize: "500000"
+            },
+            {
+              chainId: 42161,
+              availableNotional: "1500000",
+              notionalLimit: "2000000",
+              maxTransactionSize: "500000"
+            }
+          ])
+        });
+      }
+
+      // Mock token list API (legacy, might not be used anymore)
+      return Promise.resolve({
+        ok: true,
+        json: async () => ([
+          {
+            symbol: "USDC",
+            volume_24h: "1000000",
+            platforms: {
+              "ethereum": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+            }
+          }
+        ])
+      });
+    });
+  });
+
   beforeAll(async () => {
-    const { initialized } = await runtime.usePlugin("@every-plugin/template", TEST_CONFIG);
+    const { initialized } = await runtime.usePlugin("@every-plugin/wormhole", TEST_CONFIG);
     expect(initialized).toBeDefined();
-    expect(initialized.plugin.id).toBe("@every-plugin/template");
+    expect(initialized.plugin.id).toBe("@every-plugin/wormhole");
   });
 
   describe("getSnapshot procedure", () => {
     it("should fetch complete snapshot successfully", async () => {
-      const { client } = await runtime.usePlugin("@every-plugin/template", TEST_CONFIG);
+      const { client } = await runtime.usePlugin("@every-plugin/wormhole", TEST_CONFIG);
 
       const result = await client.getSnapshot({
         routes: [mockRoute],
@@ -84,7 +149,7 @@ describe("Data Provider Plugin Integration Tests", () => {
     });
 
     it("should return volumes for requested time windows", async () => {
-      const { client } = await runtime.usePlugin("@every-plugin/template", TEST_CONFIG);
+      const { client } = await runtime.usePlugin("@every-plugin/wormhole", TEST_CONFIG);
 
       const result = await client.getSnapshot({
         routes: [mockRoute],
@@ -100,7 +165,7 @@ describe("Data Provider Plugin Integration Tests", () => {
     });
 
     it("should generate rates for all route/notional combinations", async () => {
-      const { client } = await runtime.usePlugin("@every-plugin/template", TEST_CONFIG);
+      const { client } = await runtime.usePlugin("@every-plugin/wormhole", TEST_CONFIG);
 
       const result = await client.getSnapshot({
         routes: [mockRoute],
@@ -124,7 +189,7 @@ describe("Data Provider Plugin Integration Tests", () => {
     });
 
     it("should provide liquidity at required thresholds", async () => {
-      const { client } = await runtime.usePlugin("@every-plugin/template", TEST_CONFIG);
+      const { client } = await runtime.usePlugin("@every-plugin/wormhole", TEST_CONFIG);
 
       const result = await client.getSnapshot({
         routes: [mockRoute],
@@ -136,10 +201,11 @@ describe("Data Provider Plugin Integration Tests", () => {
       expect(result.liquidity[0].route).toEqual(mockRoute);
 
       const thresholds = result.liquidity[0].thresholds;
-      expect(thresholds).toHaveLength(2);
+      expect(thresholds).toHaveLength(3);
 
-      // Should have both required thresholds
+      // Should have all three thresholds based on Governor limits
       const bpsValues = thresholds.map(t => t.slippageBps);
+      expect(bpsValues).toContain(10);
       expect(bpsValues).toContain(50);
       expect(bpsValues).toContain(100);
 
@@ -151,7 +217,7 @@ describe("Data Provider Plugin Integration Tests", () => {
     });
 
     it("should return list of supported assets", async () => {
-      const { client } = await runtime.usePlugin("@every-plugin/template", TEST_CONFIG);
+      const { client } = await runtime.usePlugin("@every-plugin/wormhole", TEST_CONFIG);
 
       const result = await client.getSnapshot({
         routes: [mockRoute],
@@ -173,7 +239,7 @@ describe("Data Provider Plugin Integration Tests", () => {
     });
 
     it("should handle multiple routes correctly", async () => {
-      const { client } = await runtime.usePlugin("@every-plugin/template", TEST_CONFIG);
+      const { client } = await runtime.usePlugin("@every-plugin/wormhole", TEST_CONFIG);
 
       const secondRoute = {
         source: {
@@ -202,7 +268,7 @@ describe("Data Provider Plugin Integration Tests", () => {
     });
 
     it("should require routes and notionals", async () => {
-      const { client } = await runtime.usePlugin("@every-plugin/template", TEST_CONFIG);
+      const { client } = await runtime.usePlugin("@every-plugin/wormhole", TEST_CONFIG);
 
       // Should throw validation error for empty routes
       await expect(
@@ -224,7 +290,7 @@ describe("Data Provider Plugin Integration Tests", () => {
 
   describe("ping procedure", () => {
     it("should return healthy status", async () => {
-      const { client } = await runtime.usePlugin("@every-plugin/template", TEST_CONFIG);
+      const { client } = await runtime.usePlugin("@every-plugin/wormhole", TEST_CONFIG);
 
       const result = await client.ping();
 

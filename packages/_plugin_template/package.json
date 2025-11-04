@@ -29,5 +29,8 @@
     "test:watch": "vitest",
     "test:integration": "vitest --config vitest.integration.config.ts",
     "coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@wormhole-foundation/sdk": "^3.11.0"
   }
 }

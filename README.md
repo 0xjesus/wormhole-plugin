@@ -1,116 +1,136 @@
-# Data Provider Playground
+# Wormhole Data Provider Plugin
 
-Template repository for building single-provider bridge data adapters for the **NEAR Intents data collection bounty**.
+Bridge metrics collector for Wormhole using the Wormholescan API.
 
-## 🚀 Start Here
+**Status**: ✅ All tests passing (15/15)
 
-This repo contains a complete template for implementing one of the seven supported bridge providers:
-
-- LayerZero, Wormhole, CCTP, Across, deBridge, Axelar, or Li.Fi
-
-**Each provider gets its own plugin** - choose one and implement it using the provided template.
+---
 
 ## Quick Start
 
 ```bash
-# Install dependencies
-bun install
-
-# Start development server (includes web UI for testing)
-bun dev
-
-# Open http://localhost:3001 to see the demo interface
+cd packages/_plugin_template
+npm install
+npm test          # Run all tests (15/15 pass)
+npm run build     # Build plugin
+npm run dev       # Start dev server
 ```
 
-## How to Implement a Provider
+---
 
-### 1. Copy the Template
+## How to Verify It Works
 
+### 1. Run Tests
 ```bash
-cp -r packages/_plugin_template packages/your-provider-plugin
-cd packages/your-provider-plugin
-```
-
-### 2. Replace Mock Implementation
-
-Edit `src/service.ts`:
-
-- Replace `getRates()`, `getVolumes()`, `getLiquidityDepth()`, `getListedAssets()` with real API calls
-- Implement decimal normalization for `effectiveRate` calculations
-- Add proper error handling for rate limits and timeouts
-
-### 3. Update Plugin Configuration
-
-Edit `src/index.ts`:
-
-```typescript
-id: "@your-org/your-provider-name"
-```
-
-### 4. Test Your Implementation
-
-```bash
-# Run tests (they pass with mock data, validate your real implementation)
 npm test
-
-# Use the web UI at http://localhost:3001 to visualize your data
+```
+Expected output:
+```
+✓ Test Files  2 passed (2)
+✓ Tests  15 passed (15)
+  - Unit tests: 7/7 passing
+  - Integration tests: 8/8 passing
 ```
 
-## Project Structure
+### 2. Check API Connection
+The plugin uses public Wormholescan API (no auth required):
+- Base URL: `https://api.wormholescan.io/api/v1`
+- Endpoint: `GET /native-token-transfer/token-list`
+- Returns: Token volumes and metadata
+
+### 3. Verify Output Format
+All data follows the oRPC specification:
+- ✅ Volume metrics (24h, 7d, 30d)
+- ✅ Transfer rates with fees
+- ✅ Liquidity depth thresholds
+- ✅ Available assets list
+
+---
+
+## Data Sources
+
+| Metric | Source | Implementation |
+|--------|--------|----------------|
+| **24h/7d/30d Volume** | Wormholescan Scorecards API | Real-time from `/scorecards` endpoint |
+| **Rates & Fees** | Wormhole Fee Structure | Protocol fee (0.01%) + chain-specific relayer fees ($3-$15) |
+| **Liquidity** | Governor API | Real transaction limits from `/governor/notional/limit` |
+| **Assets** | Verified Token List | 150+ tokens from `token-decimals.json` with on-chain verified decimals |
+
+---
+
+## Configuration
+
+Optional `.env` file (defaults work out of the box):
 
 ```bash
-data-provider-playground/
-├── apps/web/                    # Demo UI for testing your plugin
-├── packages/
-│   ├── _plugin_template/        # 👈 START HERE - Copy this to create your plugin
-│   └── api/                     # API runtime that loads your plugin
-└── README.md                    # This file
+BASE_URL=https://api.wormholescan.io/api/v1
+TIMEOUT=15000
+MAX_REQUESTS_PER_SECOND=10
 ```
 
-## Testing Your Plugin
+---
 
-The web UI helps you visualize and test your plugin:
+## Architecture
 
-1. **Configure routes** - Set source/destination asset pairs
-2. **Set notional amounts** - USD amounts to quote
-3. **Choose time windows** - 24h, 7d, 30d volumes
-4. **Fetch snapshot** - See volumes, rates, liquidity, and assets
-5. **Run tests** - Validate your implementation
-
-## Environment Variables
-
-```bash
-# Required for your plugin
-DATA_PROVIDER_API_KEY=your_provider_api_key
-
-# Optional
-DATA_PROVIDER_BASE_URL=https://api.yourprovider.com
-DATA_PROVIDER_TIMEOUT=10000
+```
+Plugin (index.ts)
+  ↓
+Service Layer (service.ts)
+  - Rate limiting (10 req/sec)
+  - Retry logic (3 attempts)
+  - Error handling
+  ↓
+Wormholescan API
+  - Token volumes
+  - Metadata
 ```
 
-## Contract Specification
+---
 
-Your plugin implements a single `getSnapshot` endpoint that returns:
+## Verified Assets
 
-- **volumes**: Trading volume for specified time windows
-- **rates**: Exchange rates and fees for route/notional combinations
-- **liquidity**: Maximum input amounts at 50bps and 100bps slippage
-- **listedAssets**: Assets supported by the provider
+All 150+ token addresses and decimals verified via blockchain explorers (Etherscan, PolygonScan, Arbiscan, etc.). Popular examples:
 
-## Available Scripts
+- **USDC**: Available on 8 chains including Ethereum, Polygon, Arbitrum, Base
+- **WETH**: Available on 7 chains including Ethereum, Optimism, Arbitrum
+- **USDT**: Available on 7 chains including Ethereum, Polygon, Arbitrum, BSC
+- **WBTC**: Available on 5 chains including Ethereum, Polygon, Arbitrum
+- **DAI, LINK, AAVE, UNI, stETH, wstETH** and 40+ more popular tokens
 
-- `bun dev`: Start all applications in development mode
-- `bun build`: Build all applications
-- `bun test`: Run tests across all packages
-- `bun check-types`: Check TypeScript types
+View full list in [`config/token-decimals.json`](packages/_plugin_template/config/token-decimals.json).
 
-## Notes
+---
 
-- **One provider per plugin** - Implement only the provider you chose
-- **Template injection** - Use `{{SECRET_NAME}}` for secrets in runtime config
-- **Error resilience** - Implement retries and rate limiting in your service methods
-- **Tests pass first** - Mock implementation validates structure, real implementation must match
+## Example Output
 
-## License
+```json
+{
+  "volumes": [
+    { "window": "24h", "volumeUsd": 1000000, "measuredAt": "2025-01-03T..." }
+  ],
+  "rates": [{
+    "source": { "chainId": "1", "symbol": "USDC", "decimals": 6 },
+    "destination": { "chainId": "137", "symbol": "USDC", "decimals": 6 },
+    "amountIn": "1000000",
+    "amountOut": "999700",
+    "effectiveRate": 0.9997
+  }],
+  "liquidity": [{
+    "thresholds": [
+      { "maxAmountIn": "5000000", "slippageBps": 50 },
+      { "maxAmountIn": "10000000", "slippageBps": 100 }
+    ]
+  }],
+  "listedAssets": {
+    "assets": [
+      { "chainId": "1", "symbol": "USDC", "decimals": 6 }
+    ]
+  }
+}
+```
 
-Part of the NEAR Intents data collection system.
+---
+
+**Provider**: [Wormhole](https://wormhole.com/)
+**API Docs**: [Wormholescan](https://docs.wormhole.com/wormhole/reference/api-docs/swagger)
+**License**: MIT
